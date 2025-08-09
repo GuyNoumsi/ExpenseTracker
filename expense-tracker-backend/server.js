@@ -99,13 +99,11 @@ app.post("/api/login", async (req, res) => {
     // Passwords match, so create a JWT
     const token = jwt.sign({ userId: user.id }, jwtSecret, { expiresIn: "1h" });
 
-    res
-      .status(200)
-      .json({
-        message: "Logged in successfully",
-        token,
-        user: { id: user.id, username: user.username },
-      });
+    res.status(200).json({
+      message: "Logged in successfully",
+      token,
+      user: { id: user.id, username: user.username },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error during login" });
@@ -184,6 +182,187 @@ app.get("/reports/category-summary", authMiddleware, async (req, res) => {
   }
 });
 
+// New API route to get daily expense summary for a specific month and year
+app.get("/reports/monthly-summary", authMiddleware, async (req, res) => {
+  const { month, year } = req.query;
+  const userId = req.userId;
+
+  try {
+    const query = `
+            SELECT
+                EXTRACT(DAY FROM created_at) AS day,
+                SUM(amount) AS total_amount
+            FROM expenses
+            WHERE
+                user_id = $3
+                AND EXTRACT(MONTH FROM created_at) = $1
+                AND EXTRACT(YEAR FROM created_at) = $2
+            GROUP BY
+                day
+            ORDER BY
+                day ASC;
+        `;
+    const result = await pool.query(query, [month, year, userId]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve monthly summary data" });
+  }
+});
+
+// New API route for weekly category summary
+app.get(
+  "/reports/weekly-category-summary",
+  authMiddleware,
+  async (req, res) => {
+    const { startDate, endDate } = req.query;
+    const userId = req.userId;
+
+    try {
+      const query = `
+            SELECT
+                category,
+                SUM(amount) AS total_amount
+            FROM expenses
+            WHERE
+                user_id = $3
+                AND created_at BETWEEN $1 AND $2
+            GROUP BY
+                category
+            ORDER BY
+                total_amount DESC;
+        `;
+      const result = await pool.query(query, [startDate, endDate, userId]);
+      res.status(200).json(result.rows);
+    } catch (err) {
+      console.error(err);
+      res
+        .status(500)
+        .json({ error: "Failed to retrieve weekly category summary" });
+    }
+  }
+);
+
+// New API route for yearly category summary
+app.get(
+  "/reports/yearly-category-summary",
+  authMiddleware,
+  async (req, res) => {
+    const { year } = req.query;
+    const userId = req.userId;
+
+    try {
+      const query = `
+            SELECT
+                category,
+                SUM(amount) AS total_amount
+            FROM expenses
+            WHERE
+                user_id = $2
+                AND EXTRACT(YEAR FROM created_at) = $1
+            GROUP BY
+                category
+            ORDER BY
+                total_amount DESC;
+        `;
+      const result = await pool.query(query, [year, userId]);
+      res.status(200).json(result.rows);
+    } catch (err) {
+      console.error(err);
+      res
+        .status(500)
+        .json({ error: "Failed to retrieve yearly category summary" });
+    }
+  }
+);
+
+// New API route to get monthly expense summary for a specific year
+app.get("/reports/yearly-summary", authMiddleware, async (req, res) => {
+  const { year } = req.query;
+  const userId = req.userId;
+
+  try {
+    const query = `
+            SELECT
+                EXTRACT(MONTH FROM created_at) AS month,
+                SUM(amount) AS total_amount
+            FROM expenses
+            WHERE
+                user_id = $2
+                AND EXTRACT(YEAR FROM created_at) = $1
+            GROUP BY
+                month
+            ORDER BY
+                month ASC;
+        `;
+    const result = await pool.query(query, [year, userId]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve yearly summary data" });
+  }
+});
+
+// New API route to get daily expense summary for a specific week
+app.get("/reports/weekly-summary", authMiddleware, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const userId = req.userId;
+
+  try {
+    const query = `
+            SELECT
+                created_at::date AS day,
+                SUM(amount) AS total_amount
+            FROM expenses
+            WHERE
+                user_id = $3
+                AND created_at BETWEEN $1 AND $2
+            GROUP BY
+                day
+            ORDER BY
+                day ASC;
+        `;
+    const result = await pool.query(query, [startDate, endDate, userId]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve weekly summary data" });
+  }
+});
+// API route to update an expense
+app.put("/expenses/:id", authMiddleware, async (req, res) => {
+  const expenseId = parseInt(req.params.id);
+  const { amount, description, category, created_at } = req.body;
+  const userId = req.userId;
+
+  try {
+    const query = `
+            UPDATE expenses
+            SET amount = $1, description = $2, category = $3, created_at = $4
+            WHERE id = $5 AND user_id = $6
+            RETURNING *;
+        `;
+    const result = await pool.query(query, [
+      amount,
+      description,
+      category,
+      created_at,
+      expenseId,
+      userId,
+    ]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        error: "Expense not found or you do not have permission to edit it.",
+      });
+    }
+
+    res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update expense" });
+  }
+});
 // API route to delete an expense
 app.delete("/expenses/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
@@ -206,6 +385,102 @@ app.delete("/expenses/:id", authMiddleware, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+// New API route to get all expenses for a custom date range
+app.get("/expenses/range", authMiddleware, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const userId = req.userId;
+
+  try {
+    const query = `
+          SELECT id, amount, description, category, created_at
+          FROM expenses
+          WHERE user_id = $3 AND created_at::date BETWEEN $1 AND $2
+          ORDER BY created_at DESC;
+      `;
+    const result = await pool.query(query, [startDate, endDate, userId]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ error: "Failed to retrieve expenses for the date range" });
+  }
+});
+
+// New API route for category summary over a custom date range
+app.get("/reports/range-category-summary", authMiddleware, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const userId = req.userId;
+
+  try {
+    const query = `
+          SELECT
+              category,
+              SUM(amount) AS total_amount
+          FROM expenses
+          WHERE
+              user_id = $3
+              AND created_at::date BETWEEN $1 AND $2
+          GROUP BY
+              category
+          ORDER BY
+              total_amount DESC;
+      `;
+    const result = await pool.query(query, [startDate, endDate, userId]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve category summary" });
+  }
+});
+
+// New API route for daily spending summary over a custom date range
+app.get("/reports/range-daily-summary", authMiddleware, async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const userId = req.userId;
+
+  try {
+    const query = `
+          SELECT
+              created_at::date AS day,
+              SUM(amount) AS total_amount
+          FROM expenses
+          WHERE
+              user_id = $3
+              AND created_at::date BETWEEN $1 AND $2
+          GROUP BY
+              day
+          ORDER BY
+              day ASC;
+      `;
+    const result = await pool.query(query, [startDate, endDate, userId]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve daily summary" });
+  }
+});
+
+const server = app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
 });
+
+// Graceful shutdown handling
+const gracefulShutdown = async (signal) => {
+  console.log(`\nReceived ${signal}. Starting graceful shutdown...`);
+
+  // Stop accepting new requests
+  server.close(() => {
+    console.log("HTTP server closed.");
+  });
+
+  // Close database pool
+  await pool.end();
+  console.log("Database pool closed.");
+
+  process.exit(0);
+};
+
+// Listen for shutdown signals
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
