@@ -461,6 +461,75 @@ app.get("/reports/range-daily-summary", authMiddleware, async (req, res) => {
   }
 });
 
+// API route to get categories for a logged-in user
+app.get("/categories", authMiddleware, async (req, res) => {
+  const userId = req.userId;
+  try {
+    const query =
+      "SELECT name FROM categories WHERE user_id = $1 ORDER BY name ASC";
+    const result = await pool.query(query, [userId]);
+    res.status(200).json(result.rows.map((row) => row.name));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve categories" });
+  }
+});
+
+// API route to add a new category for a logged-in user
+app.post("/categories", authMiddleware, async (req, res) => {
+  const { name } = req.body;
+  const userId = req.userId;
+
+  if (!name) {
+    return res.status(400).json({ error: "Category name is required" });
+  }
+
+  try {
+    const query =
+      "INSERT INTO categories (name, user_id) VALUES ($1, $2) RETURNING name";
+    const result = await pool.query(query, [name, userId]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    if (err.code === "23505") {
+      // PostgreSQL unique violation error code
+      return res.status(409).json({ error: "Category already exists" });
+    }
+    res.status(500).json({ error: "Failed to add category" });
+  }
+});
+
+// API route to delete a category
+app.delete("/categories", authMiddleware, async (req, res) => {
+  const { name } = req.body;
+  const userId = req.userId;
+
+  if (!name) {
+    return res.status(400).json({ error: "Category name is required" });
+  }
+
+  try {
+    // Ensure category is user-defined and not a hardcoded one (we'll implement this on the frontend)
+    const query =
+      "DELETE FROM categories WHERE name = $1 AND user_id = $2 RETURNING *";
+    const result = await pool.query(query, [name, userId]);
+
+    if (result.rowCount === 0) {
+      return res
+        .status(404)
+        .json({
+          error:
+            "Category not found or you do not have permission to delete it.",
+        });
+    }
+
+    res.status(200).json({ message: "Category deleted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete category" });
+  }
+});
+
 const server = app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
 });
